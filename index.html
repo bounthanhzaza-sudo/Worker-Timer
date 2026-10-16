@@ -1,0 +1,1315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EAMS - Enterprise Employee Attendance Management System</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX -->
+    <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            600: '#4f46e5',
+                            700: '#4338ca'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Mock Initial Seed Data
+        const INITIAL_BRANCHES = [
+            { id: "b1", name: "Headquarters - Bangkok", address: "123 Sukhumvit Road, Bangkok", coordinates: [100.5018, 13.7563] },
+            { id: "b2", name: "Regional Office - Chiang Mai", address: "45 Nimmanhaemin Road, Chiang Mai", coordinates: [98.9685, 18.7883] }
+        ];
+
+        const INITIAL_SHIFTS = [
+            { id: "s1", name: "Standard Morning (09:00 - 18:00)", startTime: "09:00", endTime: "18:00", gracePeriodMinutes: 15, isFlexible: false },
+            { id: "s2", name: "Early Bird (08:00 - 17:00)", startTime: "08:00", endTime: "17:00", gracePeriodMinutes: 10, isFlexible: false },
+            { id: "s3", name: "Flexible Tech Shift", startTime: "10:00", endTime: "19:00", gracePeriodMinutes: 30, isFlexible: true }
+        ];
+
+        const INITIAL_EMPLOYEES = [
+            { id: "e1", name: "Somchai Jaidee", email: "somchai@eams.com", department: "Engineering", role: "Manager", branchId: "b1", shiftId: "s1", status: "Active" },
+            { id: "e2", name: "Suda Ratana", email: "suda@eams.com", department: "Human Resources", role: "Staff", branchId: "b1", shiftId: "s2", status: "Active" },
+            { id: "e3", name: "Anan Wong", email: "anan@eams.com", department: "Sales", role: "Staff", branchId: "b2", shiftId: "s1", status: "Active" }
+        ];
+
+        const INITIAL_ATTENDANCE = [
+            { 
+                id: "a1", 
+                employeeId: "e1", 
+                date: new Date().toISOString().split('T')[0], 
+                checkInTime: "08:55", 
+                checkOutTime: "18:10", 
+                status: "Present", 
+                workHours: 9.25, 
+                otHours: 0.17, 
+                auditTrail: [] 
+            },
+            { 
+                id: "a2", 
+                employeeId: "e2", 
+                date: new Date().toISOString().split('T')[0], 
+                checkInTime: "09:20", 
+                checkOutTime: "17:00", 
+                status: "Late", 
+                workHours: 7.67, 
+                otHours: 0, 
+                auditTrail: [
+                    { editedBy: "e1", editedAt: "2026-10-12 10:00", reason: "Traffic delay approved by manager", previousCheckIn: "09:35", newCheckIn: "09:20" }
+                ] 
+            }
+        ];
+
+        const INITIAL_LEAVES = [
+            { id: "l1", employeeId: "e2", leaveType: "Annual", startDate: "2026-10-20", endDate: "2026-10-22", reason: "Family trip", status: "Pending" }
+        ];
+
+        const INITIAL_OVERTIME = [
+            { id: "ot1", employeeId: "e1", date: "2026-10-11", hours: 2.5, reason: "Server migration deployment", status: "Approved" }
+        ];
+
+        function App() {
+            const [currentUser, setCurrentUser] = useState(null); // null = not logged in
+            const [currentView, setCurrentView] = useState('mytimer');
+            const [branches, setBranches] = useState(INITIAL_BRANCHES);
+            const [shifts, setShifts] = useState(INITIAL_SHIFTS);
+            const [employees, setEmployees] = useState(INITIAL_EMPLOYEES);
+            const [attendance, setAttendance] = useState(INITIAL_ATTENDANCE);
+            const [leaves, setLeaves] = useState(INITIAL_LEAVES);
+            const [overtimes, setOvertimes] = useState(INITIAL_OVERTIME);
+            const [toast, setToast] = useState(null);
+
+            const showToast = (msg) => {
+                setToast(msg);
+                setTimeout(() => setToast(null), 3000);
+            };
+
+            const handleLogout = () => {
+                if (currentUser) {
+                    const today = new Date().toISOString().split('T')[0];
+                    const todayRecord = attendance.find(a => a.employeeId === currentUser.id && a.date === today);
+                    if (todayRecord && !todayRecord.checkOutTime) {
+                        const now = new Date();
+                        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                        const [inH, inM] = todayRecord.checkInTime.split(':').map(Number);
+                        const [outH, outM] = timeStr.split(':').map(Number);
+                        const workMinutes = Math.max(0, (outH * 60 + outM) - (inH * 60 + inM));
+                        const workHours = parseFloat((workMinutes / 60).toFixed(2));
+
+                        const shift = shifts.find(s => s.id === currentUser.shiftId) || shifts[0];
+                        const [endH, endM] = (shift ? shift.endTime : '18:00').split(':').map(Number);
+                        const shiftEndMin = endH * 60 + endM;
+                        const outTotalMin = outH * 60 + outM;
+                        const otHours = outTotalMin > shiftEndMin ? parseFloat(((outTotalMin - shiftEndMin) / 60).toFixed(2)) : 0;
+
+                        const updated = attendance.map(a => a.id === todayRecord.id ? { ...a, checkOutTime: timeStr, workHours, otHours } : a);
+                        setAttendance(updated);
+                        showToast(`ออกจากระบบ: หยุดจับเวลาและบันทึกเวลาเลิกงาน (${timeStr}) เรียบร้อย`);
+                    } else {
+                        showToast(`ออกจากระบบเรียบร้อย`);
+                    }
+                }
+                setCurrentUser(null);
+            };
+
+            if (!currentUser) {
+                return <LoginView employees={employees} onLogin={setCurrentUser} showToast={showToast} />;
+            }
+
+            return (
+                <div className="min-h-screen flex flex-col bg-slate-50">
+                    {/* Toast Notification */}
+                    {toast && (
+                        <div className="fixed top-5 right-5 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-xl flex items-center space-x-3 animate-bounce">
+                            <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full"></span>
+                            <p className="text-sm font-medium">{toast}</p>
+                        </div>
+                    )}
+
+                    {/* Navigation Header */}
+                    <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                                <div className="bg-indigo-600 text-white p-2 rounded-xl font-bold text-xl shadow-md shadow-indigo-200">E</div>
+                                <div>
+                                    <h1 className="text-lg font-bold bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">EAMS Enterprise</h1>
+                                    <p className="text-xs text-slate-500">Employee Attendance Management System</p>
+                                </div>
+                            </div>
+                            <div className="flex items-center space-x-4">
+                                <span className="text-xs font-semibold text-slate-700 hidden sm:inline">👤 {currentUser.name} ({currentUser.role})</span>
+                                <button onClick={handleLogout} className="bg-rose-50 text-rose-600 hover:bg-rose-100 px-3 py-1.5 rounded-xl text-xs font-bold transition">
+                                    ออกจากระบบ
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Navigation Tabs Bar */}
+                    <div className="bg-white border-b border-slate-200 px-4 py-2 flex space-x-2 overflow-x-auto shadow-sm">
+                        {[
+                            { id: 'mytimer', label: '⏱️ เวลาทำงานของฉัน (Live Timer)' },
+                            { id: 'dashboard', label: 'Dashboard' },
+                            { id: 'checkin', label: 'Check-In/Out' },
+                            { id: 'employees', label: 'Employees' },
+                            { id: 'branches', label: 'Branches' },
+                            { id: 'shifts', label: 'Shifts' },
+                            { id: 'leaves', label: 'Leave' },
+                            { id: 'overtime', label: 'Overtime' },
+                            { id: 'attendance', label: 'History & Audit' },
+                            { id: 'reports', label: 'Reports' }
+                        ].map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setCurrentView(tab.id)}
+                                className={`px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition ${currentView === tab.id ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Main Content Router */}
+                    <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        {currentView === 'mytimer' && <LiveTimerView currentUser={currentUser} attendance={attendance} setAttendance={setAttendance} shifts={shifts} showToast={showToast} />}
+                        {currentView === 'dashboard' && <DashboardView employees={employees} attendance={attendance} leaves={leaves} overtimes={overtimes} />}
+                        {currentView === 'checkin' && <CheckInView employees={employees} shifts={shifts} attendance={attendance} setAttendance={setAttendance} showToast={showToast} />}
+                        {currentView === 'employees' && <EmployeeView employees={employees} setEmployees={setEmployees} branches={branches} shifts={shifts} attendance={attendance} setAttendance={setAttendance} showToast={showToast} />}
+                        {currentView === 'branches' && <BranchView branches={branches} setBranches={setBranches} showToast={showToast} />}
+                        {currentView === 'shifts' && <ShiftView shifts={shifts} setShifts={setShifts} showToast={showToast} />}
+                        {currentView === 'leaves' && <LeaveView leaves={leaves} setLeaves={setLeaves} employees={employees} showToast={showToast} />}
+                        {currentView === 'overtime' && <OvertimeView overtimes={overtimes} setOvertimes={setOvertimes} employees={employees} showToast={showToast} />}
+                        {currentView === 'attendance' && <AttendanceLogView attendance={attendance} setAttendance={setAttendance} employees={employees} showToast={showToast} />}
+                        {currentView === 'reports' && <ReportsView attendance={attendance} employees={employees} branches={branches} overtimes={overtimes} />}
+                    </main>
+                </div>
+            );
+        }
+
+        // Login View
+        function LoginView({ employees, onLogin, showToast }) {
+            const [email, setEmail] = useState('somchai@eams.com');
+            const [password, setPassword] = useState('password123');
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                const emp = employees.find(x => x.email.toLowerCase() === email.toLowerCase());
+                if (emp) {
+                    onLogin(emp);
+                    showToast(`ยินดีต้อนรับคุณ ${emp.name} เข้าสู่ระบบ EAMS`);
+                } else {
+                    showToast("ไม่พบอีเมลนี้ในระบบ กรุณาลองใหม่");
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-slate-50 to-indigo-100 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl border border-slate-100 space-y-6">
+                        <div className="text-center space-y-2">
+                            <div className="w-16 h-16 bg-indigo-600 text-white rounded-2xl mx-auto flex items-center justify-center text-3xl font-bold shadow-lg shadow-indigo-200">E</div>
+                            <h2 className="text-2xl font-bold text-slate-900">EAMS Enterprise Login</h2>
+                            <p className="text-sm text-slate-500">ลงชื่อเข้าใช้งานระบบบันทึกเวลาทำงานและคำนวณเงิน</p>
+                        </div>
+
+                        <form onSubmit={handleLogin} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">อีเมลพนักงาน</label>
+                                <input type="email" required value={email} onChange={e => setEmail(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">รหัสผ่าน</label>
+                                <input type="password" required value={password} onChange={e => setPassword(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                            </div>
+                            <button type="submit" className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold text-sm hover:bg-indigo-700 transition shadow-lg shadow-indigo-200">
+                                เข้าสู่ระบบ (Login)
+                            </button>
+                        </form>
+
+                        <div className="border-t border-slate-100 pt-4">
+                            <p className="text-xs text-slate-400 text-center mb-3">หรือทดลองเข้าสู่ระบบด่วนด้วยบัญชีตัวอย่าง:</p>
+                            <div className="grid grid-cols-3 gap-2">
+                                {employees.map(emp => (
+                                    <button key={emp.id} onClick={() => { onLogin(emp); showToast(`เข้าสู่ระบบในฐานะ ${emp.name}`); }} className="px-2 py-2 rounded-xl bg-slate-50 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 text-xs font-bold border border-slate-200 transition truncate">
+                                        {emp.name.split(' ')[0]}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Live Work Timer Portal View
+        function LiveTimerView({ currentUser, attendance, setAttendance, shifts, showToast }) {
+            const today = new Date().toISOString().split('T')[0];
+            const shift = shifts.find(s => s.id === currentUser.shiftId) || shifts[0];
+
+            // Automatically start working timer on login if not already started today or restart if previously logged out
+            useEffect(() => {
+                const existing = attendance.find(a => a.employeeId === currentUser.id && a.date === today);
+                const now = new Date();
+                const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                
+                let status = 'Present';
+                const activeShift = shift || shifts[0];
+                if (activeShift && activeShift.startTime) {
+                    const [sH, sM] = activeShift.startTime.split(':').map(Number);
+                    const shiftStartMin = sH * 60 + sM;
+                    const checkInMin = now.getHours() * 60 + now.getMinutes();
+                    status = checkInMin > (shiftStartMin + (activeShift.gracePeriodMinutes || 15)) ? 'Late' : 'Present';
+                }
+
+                if (!existing) {
+                    const newRecord = {
+                        id: `a-${Date.now()}`,
+                        employeeId: currentUser.id,
+                        date: today,
+                        checkInTime: timeStr,
+                        checkOutTime: null,
+                        status,
+                        workHours: 0,
+                        otHours: 0,
+                        auditTrail: []
+                    };
+                    setAttendance(prev => [newRecord, ...prev]);
+                } else if (existing.checkOutTime) {
+                    // Restart timer on re-login
+                    const updated = attendance.map(a => a.id === existing.id ? { ...a, checkOutTime: null, checkInTime: timeStr, workHours: 0, otHours: 0 } : a);
+                    setAttendance(updated);
+                }
+            }, [currentUser, today]);
+
+            const todayRecord = attendance.find(a => a.employeeId === currentUser.id && a.date === today);
+            const [secondsElapsed, setSecondsElapsed] = useState(0);
+
+            useEffect(() => {
+                let interval = null;
+                if (todayRecord && todayRecord.checkInTime && !todayRecord.checkOutTime) {
+                    const [inH, inM] = todayRecord.checkInTime.split(':').map(Number);
+                    const now = new Date();
+                    const currentTotalSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+                    const checkInTotalSec = inH * 3600 + inM * 60;
+                    const diffSec = Math.max(0, currentTotalSec - checkInTotalSec);
+                    setSecondsElapsed(diffSec);
+
+                    interval = setInterval(() => {
+                        setSecondsElapsed(prev => prev + 1);
+                    }, 1000);
+                } else if (todayRecord && todayRecord.checkOutTime) {
+                    const [inH, inM] = todayRecord.checkInTime.split(':').map(Number);
+                    const [outH, outM] = todayRecord.checkOutTime.split(':').map(Number);
+                    const diffSec = Math.max(0, (outH * 3600 + outM * 60) - (inH * 3600 + inM * 60));
+                    setSecondsElapsed(diffSec);
+                }
+                return () => clearInterval(interval);
+            }, [todayRecord]);
+
+            const formatTime = (totalSec) => {
+                const hrs = Math.floor(totalSec / 3600);
+                const mins = Math.floor((totalSec % 3600) / 60);
+                const secs = totalSec % 60;
+                return `${String(hrs).padStart(2, '0')} ชม. ${String(mins).padStart(2, '0')} นาที ${String(secs).padStart(2, '0')} วินาที`;
+            };
+
+            const handleStopWork = () => {
+                const now = new Date();
+                const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                
+                const activeRecord = todayRecord || {
+                    id: `a-${Date.now()}`,
+                    employeeId: currentUser.id,
+                    date: today,
+                    checkInTime: '09:00',
+                    status: 'Present',
+                    auditTrail: []
+                };
+
+                if (activeRecord.checkOutTime) {
+                    showToast("คุณได้บันทึกเลิกงานไปแล้ววันนี้");
+                    return;
+                }
+
+                const [inH, inM] = (activeRecord.checkInTime || '09:00').split(':').map(Number);
+                const [outH, outM] = timeStr.split(':').map(Number);
+                const workMinutes = Math.max(0, (outH * 60 + outM) - (inH * 60 + inM));
+                const workHours = parseFloat((workMinutes / 60).toFixed(2));
+
+                const activeShift = shift || shifts[0];
+                const [endH, endM] = (activeShift ? activeShift.endTime : '18:00').split(':').map(Number);
+                const shiftEndMin = endH * 60 + endM;
+                const outTotalMin = outH * 60 + outM;
+                const otHours = outTotalMin > shiftEndMin ? parseFloat(((outTotalMin - shiftEndMin) / 60).toFixed(2)) : 0;
+
+                if (todayRecord) {
+                    const updated = attendance.map(a => a.id === todayRecord.id ? { ...a, checkOutTime: timeStr, workHours, otHours } : a);
+                    setAttendance(updated);
+                } else {
+                    const newRec = { ...activeRecord, checkOutTime: timeStr, workHours, otHours };
+                    setAttendance(prev => [newRec, ...prev]);
+                }
+                showToast(`⏹️ บันทึกเลิกงานเรียบร้อย! ทำงานรวม ${workHours} ชั่วโมง`);
+            };
+
+            return (
+                <div className="max-w-xl mx-auto space-y-6">
+                    <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 text-center space-y-6">
+                        <div className="inline-block bg-indigo-50 text-indigo-700 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider">
+                            ระบบจับเวลาอัตโนมัติ (Auto Work Timer)
+                        </div>
+                        <h2 className="text-3xl font-extrabold text-slate-900">สวัสดี, {currentUser.name}</h2>
+                        <p className="text-sm text-slate-500">กะการทำงาน: {shift.name} ({shift.startTime} - {shift.endTime})</p>
+
+                        {/* Live Timer Card */}
+                        <div className="bg-gradient-to-br from-indigo-600 to-violet-700 text-white p-8 rounded-2xl shadow-xl space-y-4">
+                            <p className="text-xs font-bold uppercase tracking-widest text-indigo-200">⏱️ เวลานับเวลาทำงานปัจจุบัน (Active Timer)</p>
+                            <div className="text-3xl sm:text-5xl font-black font-mono tracking-tight animate-pulse">
+                                {formatTime(secondsElapsed)}
+                            </div>
+                            <div className="flex justify-center items-center space-x-3 pt-2 text-xs text-indigo-100">
+                                <span>เวลาเริ่มงาน: <b>{todayRecord ? todayRecord.checkInTime : '-'}</b></span>
+                                {todayRecord && todayRecord.status === 'Late' && <span className="bg-amber-400 text-slate-900 font-bold px-2 py-0.5 rounded">มาสาย (Late)</span>}
+                                {todayRecord && todayRecord.checkOutTime && <span className="bg-emerald-500 text-white font-bold px-2 py-0.5 rounded">เลิกงานแล้ว ({todayRecord.checkOutTime})</span>}
+                            </div>
+                        </div>
+
+                        {/* Action Button */}
+                        <div>
+                            <button 
+                                onClick={handleStopWork}
+                                disabled={todayRecord && todayRecord.checkOutTime}
+                                className={`w-full py-4 rounded-2xl font-bold text-white transition shadow-lg ${
+                                    todayRecord && todayRecord.checkOutTime ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'
+                                }`}>
+                                ⏹️ เสร็จสิ้นงาน / เลิกงาน (Stop & Save)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 1. Dashboard View
+        function DashboardView({ employees, attendance, leaves, overtimes }) {
+            const today = new Date().toISOString().split('T')[0];
+            const todayRecords = attendance.filter(a => a.date === today);
+            const presentToday = todayRecords.filter(a => a.status === 'Present' || a.status === 'Late').length;
+            const lateToday = todayRecords.filter(a => a.status === 'Late').length;
+            const onLeaveToday = leaves.filter(l => l.status === 'Approved' && l.startDate <= today && l.endDate >= today).length;
+            const pendingReqs = leaves.filter(l => l.status === 'Pending').length + overtimes.filter(o => o.status === 'Pending').length;
+
+            return (
+                <div className="space-y-8">
+                    <div>
+                        <h2 className="text-2xl font-bold text-slate-900">Executive Dashboard</h2>
+                        <p className="text-sm text-slate-500">Real-time overview of employee attendance and workforce metrics today.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs font-semibold text-slate-400 uppercase">Active Staff</p>
+                            <p className="text-3xl font-extrabold text-slate-900 mt-2">{employees.filter(e => e.status === 'Active').length}</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs font-semibold text-slate-400 uppercase">Present Today</p>
+                            <p className="text-3xl font-extrabold text-emerald-600 mt-2">{presentToday}</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs font-semibold text-slate-400 uppercase">Late Arrivals</p>
+                            <p className="text-3xl font-extrabold text-amber-600 mt-2">{lateToday}</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs font-semibold text-slate-400 uppercase">On Leave Today</p>
+                            <p className="text-3xl font-extrabold text-blue-600 mt-2">{onLeaveToday}</p>
+                        </div>
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <p className="text-xs font-semibold text-slate-400 uppercase">Pending Approvals</p>
+                            <p className="text-3xl font-extrabold text-indigo-600 mt-2">{pendingReqs}</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h3 className="text-lg font-bold text-slate-900 mb-4">Today's Attendance Logs</h3>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                        <th className="p-3">Employee</th>
+                                        <th className="p-3">Department</th>
+                                        <th className="p-3">Check-In</th>
+                                        <th className="p-3">Check-Out</th>
+                                        <th className="p-3">Work Hours</th>
+                                        <th className="p-3">OT Hours</th>
+                                        <th className="p-3">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {todayRecords.map(rec => {
+                                        const emp = employees.find(e => e.id === rec.employeeId);
+                                        return (
+                                            <tr key={rec.id} className="hover:bg-slate-50">
+                                                <td className="p-3 font-semibold text-slate-800">{emp ? emp.name : 'Unknown'}</td>
+                                                <td className="p-3 text-slate-600">{emp ? emp.department : '-'}</td>
+                                                <td className="p-3 text-slate-600">{rec.checkInTime || '-'}</td>
+                                                <td className="p-3 text-slate-600">{rec.checkOutTime || 'Working...'}</td>
+                                                <td className="p-3 font-semibold text-indigo-600">{rec.workHours ? `${rec.workHours} hrs` : '-'}</td>
+                                                <td className="p-3 font-semibold text-emerald-600">{rec.otHours ? `${rec.otHours} hrs` : '-'}</td>
+                                                <td className="p-3">
+                                                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                        rec.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
+                                                        rec.status === 'Late' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'
+                                                    }`}>
+                                                        {rec.status}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                    {todayRecords.length === 0 && (
+                                        <tr><td colSpan="7" className="p-6 text-center text-slate-400">No attendance records for today yet. Use the Check-In tab to simulate punch records.</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 2. Check-In / Check-Out Simulator View
+        function CheckInView({ employees, shifts, attendance, setAttendance, showToast }) {
+            const [selectedEmp, setSelectedEmp] = useState(employees[0]?.id || '');
+            const today = new Date().toISOString().split('T')[0];
+
+            const handleCheckIn = () => {
+                const emp = employees.find(e => e.id === selectedEmp);
+                if (!emp) return;
+                const shift = shifts.find(s => s.id === emp.shiftId);
+                
+                const now = new Date();
+                const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                
+                const [sHour, sMin] = shift.startTime.split(':').map(Number);
+                const shiftStartMinutes = sHour * 60 + sMin;
+                const [cHour, cMin] = timeStr.split(':').map(Number);
+                const checkInMinutes = cHour * 60 + cMin;
+                const status = checkInMinutes > (shiftStartMinutes + shift.gracePeriodMinutes) ? 'Late' : 'Present';
+
+                const existingIndex = attendance.findIndex(a => a.employeeId === selectedEmp && a.date === today);
+                if (existingIndex >= 0 && attendance[existingIndex].checkInTime) {
+                    showToast("Employee already checked in today!");
+                    return;
+                }
+
+                if (existingIndex >= 0) {
+                    const updated = [...attendance];
+                    updated[existingIndex] = { ...updated[existingIndex], checkInTime: timeStr, status };
+                    setAttendance(updated);
+                } else {
+                    const newRecord = {
+                        id: `a-${Date.now()}`,
+                        employeeId: selectedEmp,
+                        date: today,
+                        checkInTime: timeStr,
+                        checkOutTime: null,
+                        status,
+                        workHours: 0,
+                        otHours: 0,
+                        auditTrail: []
+                    };
+                    setAttendance([newRecord, ...attendance]);
+                }
+                showToast(`Check-in successful! Status: ${status}`);
+            };
+
+            const handleCheckOut = () => {
+                const existingIndex = attendance.findIndex(a => a.employeeId === selectedEmp && a.date === today);
+                if (existingIndex < 0 || !attendance[existingIndex].checkInTime) {
+                    showToast("No check-in record found for today!");
+                    return;
+                }
+                if (attendance[existingIndex].checkOutTime) {
+                    showToast("Already checked out today!");
+                    return;
+                }
+
+                const emp = employees.find(e => e.id === selectedEmp);
+                const shift = shifts.find(s => s.id === emp.shiftId);
+
+                const now = new Date();
+                const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+                const record = attendance[existingIndex];
+                const [inH, inM] = record.checkInTime.split(':').map(Number);
+                const [outH, outM] = timeStr.split(':').map(Number);
+                const workMinutes = (outH * 60 + outM) - (inH * 60 + inM);
+                const workHours = parseFloat((workMinutes / 60).toFixed(2));
+
+                const [endH, endM] = shift.endTime.split(':').map(Number);
+                const shiftEndMinutes = endH * 60 + endM;
+                const outTotalMinutes = outH * 60 + outM;
+                const otHours = outTotalMinutes > shiftEndMinutes ? parseFloat(((outTotalMinutes - shiftEndMinutes) / 60).toFixed(2)) : 0;
+
+                const updated = [...attendance];
+                updated[existingIndex] = {
+                    ...record,
+                    checkOutTime: timeStr,
+                    workHours,
+                    otHours
+                };
+                setAttendance(updated);
+                showToast(`Check-out successful! Work Hours: ${workHours}h, OT: ${otHours}h`);
+            };
+
+            return (
+                <div className="max-w-xl mx-auto bg-white p-8 rounded-3xl shadow-xl border border-slate-100 space-y-6">
+                    <div className="text-center">
+                        <h2 className="text-2xl font-bold text-slate-900">Attendance Punch Terminal</h2>
+                        <p className="text-sm text-slate-500 mt-1">Record daily check-in and check-out timestamps</p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-2">Select Employee</label>
+                        <select 
+                            value={selectedEmp}
+                            onChange={e => setSelectedEmp(e.target.value)}
+                            className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            {employees.map(e => (
+                                <option key={e.id} value={e.id}>{e.name} ({e.department} - {e.role})</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 pt-4">
+                        <button 
+                            onClick={handleCheckIn}
+                            className="bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 transition shadow-lg shadow-emerald-200">
+                            Check-In Now
+                        </button>
+                        <button 
+                            onClick={handleCheckOut}
+                            className="bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition shadow-lg shadow-indigo-200">
+                            Check-Out Now
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // 3. Employee Management View
+        function EmployeeView({ employees, setEmployees, branches, shifts, attendance, setAttendance, showToast }) {
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [selectedEmpForStatus, setSelectedEmpForStatus] = useState(null);
+            const [form, setForm] = useState({ name: '', email: '', department: 'Engineering', role: 'Staff', branchId: branches[0]?.id, shiftId: shifts[0]?.id, status: 'Active' });
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const newEmp = { id: `e-${Date.now()}`, ...form };
+                setEmployees([newEmp, ...employees]);
+                setIsModalOpen(false);
+                showToast("Employee added successfully!");
+            };
+
+            const toggleStatus = (id) => {
+                setEmployees(employees.map(e => e.id === id ? { ...e, status: e.status === 'Active' ? 'Inactive' : 'Active' } : e));
+                showToast("Employee status updated.");
+            };
+
+            const handleStatusSelect = (statusLabel) => {
+                if (!selectedEmpForStatus) return;
+                const today = new Date().toISOString().split('T')[0];
+                const existingIndex = attendance.findIndex(a => a.employeeId === selectedEmpForStatus.id && a.date === today);
+                
+                let newStatus = 'Present';
+                if (statusLabel === 'ลาพัก') newStatus = 'On Leave';
+                else if (statusLabel === 'ลาป่วย') newStatus = 'Sick Leave';
+                else if (statusLabel === 'ไม่ได้ลา') newStatus = 'Absent';
+                else if (statusLabel === 'มาตามปกติ') newStatus = 'Present';
+
+                if (existingIndex >= 0) {
+                    const updated = [...attendance];
+                    updated[existingIndex] = { ...updated[existingIndex], status: newStatus };
+                    setAttendance(updated);
+                } else {
+                    const newRecord = {
+                        id: `a-${Date.now()}`,
+                        employeeId: selectedEmpForStatus.id,
+                        date: today,
+                        checkInTime: newStatus === 'Present' || newStatus === 'Late' ? '09:00' : null,
+                        checkOutTime: null,
+                        status: newStatus,
+                        workHours: 0,
+                        otHours: 0,
+                        auditTrail: []
+                    };
+                    setAttendance([newRecord, ...attendance]);
+                }
+
+                showToast(`อัพเดทสถานะพนักงาน ${selectedEmpForStatus.name} เป็น "${statusLabel}" เรียบร้อยแล้ว`);
+                setSelectedEmpForStatus(null);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-900">Employee Management</h2>
+                            <p className="text-sm text-slate-500">Manage employee profiles, departments, roles, and branch assignments. <span className="text-indigo-600 font-medium">(💡 คลิกที่ชื่อพนักงานเพื่อจัดการสถานะ ลาพัก/ลาป่วย/มาตามปกติ)</span></p>
+                        </div>
+                        <button onClick={() => setIsModalOpen(true)} className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-semibold text-sm hover:bg-indigo-700 transition shadow-md shadow-indigo-200">
+                            + Add Employee
+                        </button>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                        <table className="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                    <th className="p-4">Name (Click to Update Status)</th>
+                                    <th className="p-4">Department</th>
+                                    <th className="p-4">Role</th>
+                                    <th className="p-4">Branch</th>
+                                    <th className="p-4">Shift</th>
+                                    <th className="p-4">Status</th>
+                                    <th className="p-4 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {employees.map(emp => {
+                                    const b = branches.find(x => x.id === emp.branchId);
+                                    const s = shifts.find(x => x.id === emp.shiftId);
+                                    return (
+                                        <tr key={emp.id} className="hover:bg-slate-50">
+                                            <td className="p-4 font-semibold text-slate-900 cursor-pointer hover:text-indigo-600 transition" onClick={() => setSelectedEmpForStatus(emp)}>
+                                                {emp.name} <span className="text-xs text-indigo-500 font-normal block">🖱️ คลิกเพื่อเปลี่ยนสถานะวันนี้</span>
+                                                <span className="text-xs text-slate-400 font-normal">{emp.email}</span>
+                                            </td>
+                                            <td className="p-4 text-slate-600">{emp.department}</td>
+                                            <td className="p-4 text-slate-600 font-medium">{emp.role}</td>
+                                            <td className="p-4 text-slate-600">{b ? b.name : '-'}</td>
+                                            <td className="p-4 text-slate-600">{s ? s.name : '-'}</td>
+                                            <td className="p-4">
+                                                <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${emp.status === 'Active' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                                                    {emp.status}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 text-right">
+                                                <button onClick={() => toggleStatus(emp.id)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 transition">
+                                                    Toggle Status
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {selectedEmpForStatus && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+                            <div className="bg-white rounded-3xl max-w-sm w-full p-8 shadow-2xl space-y-4">
+                                <h3 className="text-xl font-bold text-slate-900">อัพเดทสถานะพนักงาน</h3>
+                                <p className="text-sm text-slate-600">เลือกสถานะการมาทำงานวันนี้สำหรับ <b>{selectedEmpForStatus.name}</b>:</p>
+                                <div className="space-y-2">
+                                    <button onClick={() => handleStatusSelect('มาตามปกติ')} className="w-full text-left px-4 py-3 rounded-xl bg-emerald-50 text-emerald-700 font-bold hover:bg-emerald-100 transition">🟢 มาตามปกติ (Present)</button>
+                                    <button onClick={() => handleStatusSelect('ลาพัก')} className="w-full text-left px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold hover:bg-blue-100 transition">🔵 ลาพัก (Leave)</button>
+                                    <button onClick={() => handleStatusSelect('ลาป่วย')} className="w-full text-left px-4 py-3 rounded-xl bg-purple-50 text-purple-700 font-bold hover:bg-purple-100 transition">🟣 ลาป่วย (Sick Leave)</button>
+                                    <button onClick={() => handleStatusSelect('ไม่ได้ลา')} className="w-full text-left px-4 py-3 rounded-xl bg-rose-50 text-rose-700 font-bold hover:bg-rose-100 transition">🔴 ไม่ได้ลา / ขาดงาน (Absent)</button>
+                                </div>
+                                <button onClick={() => setSelectedEmpForStatus(null)} className="w-full bg-slate-100 py-2.5 rounded-xl text-xs font-semibold text-slate-600">ยกเลิก</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {isModalOpen && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+                            <div className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl">
+                                <h3 className="text-xl font-bold text-slate-900 mb-4">Add New Employee</h3>
+                                <form onSubmit={handleSubmit} className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Full Name</label>
+                                        <input type="text" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Email</label>
+                                        <input type="email" required value={form.email} onChange={e => setForm({...form, email: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Department</label>
+                                            <input type="text" required value={form.department} onChange={e => setForm({...form, department: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Role</label>
+                                            <select value={form.role} onChange={e => setForm({...form, role: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-white">
+                                                <option value="Staff">Staff</option>
+                                                <option value="Manager">Manager</option>
+                                                <option value="Admin">Admin</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Branch</label>
+                                            <select value={form.branchId} onChange={e => setForm({...form, branchId: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-white">
+                                                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Shift</label>
+                                            <select value={form.shiftId} onChange={e => setForm({...form, shiftId: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-white">
+                                                {shifts.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="flex space-x-3 pt-4">
+                                        <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 bg-slate-100 py-3 rounded-xl font-semibold text-sm">Cancel</button>
+                                        <button type="submit" className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm shadow-lg shadow-indigo-200">Save</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // 4. Branch Management View
+        function BranchView({ branches, setBranches, showToast }) {
+            const [name, setName] = useState('');
+            const [address, setAddress] = useState('');
+
+            const handleAdd = (e) => {
+                e.preventDefault();
+                setBranches([{ id: `b-${Date.now()}`, name, address }, ...branches]);
+                setName(''); setAddress('');
+                showToast("Branch added successfully!");
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-2xl font-bold text-slate-900">Branch Management</h2>
+                        <p className="text-sm text-slate-500">Manage company office locations and geofence coordinates.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <h3 className="text-lg font-bold text-slate-900 mb-4">Add Branch</h3>
+                            <form onSubmit={handleAdd} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Branch Name</label>
+                                    <input type="text" required value={name} onChange={e => setName(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Address</label>
+                                    <textarea required rows="3" value={address} onChange={e => setAddress(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm"></textarea>
+                                </div>
+                                <button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm shadow-lg shadow-indigo-200">Add Branch</button>
+                            </form>
+                        </div>
+                        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                        <th className="p-4">Branch Name</th>
+                                        <th className="p-4">Address</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {branches.map(b => (
+                                        <tr key={b.id} className="hover:bg-slate-50">
+                                            <td className="p-4 font-bold text-slate-900">{b.name}</td>
+                                            <td className="p-4 text-slate-600">{b.address}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 5. Shift Management View
+        function ShiftView({ shifts, setShifts, showToast }) {
+            const [form, setForm] = useState({ name: '', startTime: '09:00', endTime: '18:00', gracePeriodMinutes: 15 });
+
+            const handleAdd = (e) => {
+                e.preventDefault();
+                setShifts([{ id: `s-${Date.now()}`, ...form }, ...shifts]);
+                showToast("Shift defined successfully!");
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-2xl font-bold text-slate-900">Shift Management</h2>
+                        <p className="text-sm text-slate-500">Define working hours, late arrival grace periods, and shift timings.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <h3 className="text-lg font-bold text-slate-900 mb-4">Define New Shift</h3>
+                            <form onSubmit={handleAdd} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Shift Name</label>
+                                    <input type="text" required value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Start Time</label>
+                                        <input type="time" required value={form.startTime} onChange={e => setForm({...form, startTime: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">End Time</label>
+                                        <input type="time" required value={form.endTime} onChange={e => setForm({...form, endTime: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Grace Period (Mins)</label>
+                                    <input type="number" required value={form.gracePeriodMinutes} onChange={e => setForm({...form, gracePeriodMinutes: parseInt(e.target.value)})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                </div>
+                                <button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm shadow-lg shadow-indigo-200">Save Shift</button>
+                            </form>
+                        </div>
+                        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                        <th className="p-4">Shift Name</th>
+                                        <th className="p-4">Timing</th>
+                                        <th className="p-4">Grace Period</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {shifts.map(s => (
+                                        <tr key={s.id} className="hover:bg-slate-50">
+                                            <td className="p-4 font-bold text-slate-900">{s.name}</td>
+                                            <td className="p-4 text-slate-600 font-semibold">{s.startTime} - {s.endTime}</td>
+                                            <td className="p-4 text-slate-600">{s.gracePeriodMinutes} mins</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 6. Leave Management View
+        function LeaveView({ leaves, setLeaves, employees, showToast }) {
+            const [form, setForm] = useState({ employeeId: employees[0]?.id, leaveType: 'Annual', startDate: '', endDate: '', reason: '' });
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const newLeave = { id: `l-${Date.now()}`, ...form, status: 'Pending' };
+                setLeaves([newLeave, ...leaves]);
+                showToast("Leave request submitted!");
+            };
+
+            const updateStatus = (id, status) => {
+                setLeaves(leaves.map(l => l.id === id ? { ...l, status } : l));
+                showToast(`Leave request ${status.toLowerCase()}`);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-2xl font-bold text-slate-900">Leave Management</h2>
+                        <p className="text-sm text-slate-500">Submit, track, and approve employee leave requests.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <h3 className="text-lg font-bold text-slate-900 mb-4">Request Leave</h3>
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Employee</label>
+                                    <select value={form.employeeId} onChange={e => setForm({...form, employeeId: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-white">
+                                        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Leave Type</label>
+                                    <select value={form.leaveType} onChange={e => setForm({...form, leaveType: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-white">
+                                        <option value="Annual">Annual Leave</option>
+                                        <option value="Sick">Sick Leave</option>
+                                        <option value="Casual">Casual Leave</option>
+                                    </select>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Start Date</label>
+                                        <input type="date" required value={form.startDate} onChange={e => setForm({...form, startDate: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">End Date</label>
+                                        <input type="date" required value={form.endDate} onChange={e => setForm({...form, endDate: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Reason</label>
+                                    <textarea required rows="2" value={form.reason} onChange={e => setForm({...form, reason: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm"></textarea>
+                                </div>
+                                <button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm shadow-lg shadow-indigo-200">Submit Request</button>
+                            </form>
+                        </div>
+                        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                        <th className="p-4">Employee</th>
+                                        <th className="p-4">Type</th>
+                                        <th className="p-4">Dates</th>
+                                        <th className="p-4">Reason</th>
+                                        <th className="p-4">Status</th>
+                                        <th className="p-4 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {leaves.map(l => {
+                                        const emp = employees.find(e => e.id === l.employeeId);
+                                        return (
+                                            <tr key={l.id} className="hover:bg-slate-50">
+                                                <td className="p-4 font-bold text-slate-900">{emp ? emp.name : 'Unknown'}</td>
+                                                <td className="p-4 text-slate-600">{l.leaveType}</td>
+                                                <td className="p-4 text-slate-600">{l.startDate} to {l.endDate}</td>
+                                                <td className="p-4 text-slate-600">{l.reason}</td>
+                                                <td className="p-4">
+                                                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                        l.status === 'Approved' ? 'bg-emerald-50 text-emerald-700' :
+                                                        l.status === 'Rejected' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
+                                                    }`}>{l.status}</span>
+                                                </td>
+                                                <td className="p-4 text-right space-x-2">
+                                                    {l.status === 'Pending' && (
+                                                        <>
+                                                            <button onClick={() => updateStatus(l.id, 'Approved')} className="text-xs font-semibold px-3 py-1 rounded-lg bg-emerald-50 text-emerald-700">Approve</button>
+                                                            <button onClick={() => updateStatus(l.id, 'Rejected')} className="text-xs font-semibold px-3 py-1 rounded-lg bg-rose-50 text-rose-700">Reject</button>
+                                                        </>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 7. Overtime Management View
+        function OvertimeView({ overtimes, setOvertimes, employees, showToast }) {
+            const [form, setForm] = useState({ employeeId: employees[0]?.id, date: new Date().toISOString().split('T')[0], hours: 2, reason: '' });
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const hourlyRate = 30000 / 160;
+                const otPay = parseFloat((form.hours * hourlyRate * 1.5).toFixed(2));
+                const newOt = { id: `ot-${Date.now()}`, ...form, otPay, status: 'Pending' };
+                setOvertimes([newOt, ...overtimes]);
+                showToast(`Overtime logged successfully! OT Pay: ฿${otPay.toLocaleString()}`);
+            };
+
+            const updateStatus = (id, status) => {
+                setOvertimes(overtimes.map(o => o.id === id ? { ...o, status } : o));
+                showToast(`Overtime ${status.toLowerCase()}`);
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-2xl font-bold text-slate-900">Overtime (OT) Management & Calculation</h2>
+                        <p className="text-sm text-slate-500">Track and automatically calculate overtime pay (1.5x rate) for payroll integration.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                            <h3 className="text-lg font-bold text-slate-900 mb-4">Log Overtime</h3>
+                            <form onSubmit={handleSubmit} className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Employee</label>
+                                    <select value={form.employeeId} onChange={e => setForm({...form, employeeId: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm bg-white">
+                                        {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                                    </select>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Date</label>
+                                        <input type="date" required value={form.date} onChange={e => setForm({...form, date: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Hours</label>
+                                        <input type="number" step="0.5" required value={form.hours} onChange={e => setForm({...form, hours: parseFloat(e.target.value)})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Reason</label>
+                                    <textarea required rows="2" value={form.reason} onChange={e => setForm({...form, reason: e.target.value})} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm"></textarea>
+                                </div>
+                                <button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm shadow-lg shadow-indigo-200">Log & Calculate OT Pay</button>
+                            </form>
+                        </div>
+                        <div className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                            <table className="w-full text-left border-collapse text-sm">
+                                <thead>
+                                    <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                        <th className="p-4">Employee</th>
+                                        <th className="p-4">Date</th>
+                                        <th className="p-4">Hours</th>
+                                        <th className="p-4">OT Pay (฿)</th>
+                                        <th className="p-4">Reason</th>
+                                        <th className="p-4">Status</th>
+                                        <th className="p-4 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {overtimes.map(ot => {
+                                        const emp = employees.find(e => e.id === ot.employeeId);
+                                        const calcPay = ot.otPay || (ot.hours * (30000 / 160) * 1.5);
+                                        return (
+                                            <tr key={ot.id} className="hover:bg-slate-50">
+                                                <td className="p-4 font-bold text-slate-900">{emp ? emp.name : 'Unknown'}</td>
+                                                <td className="p-4 text-slate-600">{ot.date}</td>
+                                                <td className="p-4 font-bold text-emerald-600">{ot.hours} hrs</td>
+                                                <td className="p-4 font-extrabold text-indigo-600">฿{calcPay.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                                                <td className="p-4 text-slate-600">{ot.reason}</td>
+                                                <td className="p-4">
+                                                    <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                        ot.status === 'Approved' ? 'bg-emerald-50 text-emerald-700' :
+                                                        ot.status === 'Rejected' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'
+                                                    }`}>{ot.status}</span>
+                                                </td>
+                                                <td className="p-4 text-right space-x-2">
+                                                    {ot.status === 'Pending' && (
+                                                        <>
+                                                            <button onClick={() => updateStatus(ot.id, 'Approved')} className="text-xs font-semibold px-3 py-1 rounded-lg bg-emerald-50 text-emerald-700">Approve</button>
+                                                            <button onClick={() => updateStatus(ot.id, 'Rejected')} className="text-xs font-semibold px-3 py-1 rounded-lg bg-rose-50 text-rose-700">Reject</button>
+                                                        </>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // 8. Attendance History & Adjustment Modal View
+        function AttendanceLogView({ attendance, setAttendance, employees, showToast }) {
+            const [editingRecord, setEditingRecord] = useState(null);
+            const [checkIn, setCheckIn] = useState('');
+            const [checkOut, setCheckOut] = useState('');
+            const [reason, setReason] = useState('');
+
+            const openEdit = (rec) => {
+                setEditingRecord(rec);
+                setCheckIn(rec.checkInTime || '');
+                setCheckOut(rec.checkOutTime || '');
+                setReason('');
+            };
+
+            const handleSave = (e) => {
+                e.preventDefault();
+                if (!reason) return alert("Reason for adjustment is required.");
+
+                const updated = attendance.map(a => {
+                    if (a.id === editingRecord.id) {
+                        const auditEntry = {
+                            editedBy: "Admin / Manager",
+                            editedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
+                            previousCheckIn: a.checkInTime,
+                            newCheckIn: checkIn,
+                            previousCheckOut: a.checkOutTime,
+                            newCheckOut: checkOut,
+                            reason
+                        };
+                        return {
+                            ...a,
+                            checkInTime: checkIn,
+                            checkOutTime: checkOut,
+                            auditTrail: [auditEntry, ...(a.auditTrail || [])]
+                        };
+                    }
+                    return a;
+                });
+
+                setAttendance(updated);
+                setEditingRecord(null);
+                showToast("Attendance record adjusted successfully with audit log.");
+            };
+
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-2xl font-bold text-slate-900">Attendance History & Audit Logs</h2>
+                        <p className="text-sm text-slate-500">View team attendance records and perform manual corrections with audit trails.</p>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                        <table className="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                    <th className="p-4">Date</th>
+                                    <th className="p-4">Employee</th>
+                                    <th className="p-4">Check-In</th>
+                                    <th className="p-4">Check-Out</th>
+                                    <th className="p-4">Status</th>
+                                    <th className="p-4">Audit Edits</th>
+                                    <th className="p-4 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {attendance.map(rec => {
+                                    const emp = employees.find(e => e.id === rec.employeeId);
+                                    return (
+                                        <tr key={rec.id} className="hover:bg-slate-50">
+                                            <td className="p-4 font-semibold text-slate-900">{rec.date}</td>
+                                            <td className="p-4 text-slate-700">{emp ? emp.name : 'Unknown'}</td>
+                                            <td className="p-4 text-slate-600">{rec.checkInTime || '-'}</td>
+                                            <td className="p-4 text-slate-600">{rec.checkOutTime || '-'}</td>
+                                            <td className="p-4">
+                                                <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
+                                                    rec.status === 'Present' ? 'bg-emerald-50 text-emerald-700' :
+                                                    rec.status === 'Late' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'
+                                                }`}>{rec.status}</span>
+                                            </td>
+                                            <td className="p-4">
+                                                {rec.auditTrail && rec.auditTrail.length > 0 ? (
+                                                    <span className="bg-indigo-50 text-indigo-700 text-xs font-bold px-2.5 py-1 rounded-lg">
+                                                        {rec.auditTrail.length} adjustment(s)
+                                                    </span>
+                                                ) : <span className="text-slate-400 text-xs">No edits</span>}
+                                            </td>
+                                            <td className="p-4 text-right">
+                                                <button onClick={() => openEdit(rec)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition">
+                                                    Adjust Time
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {editingRecord && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50">
+                            <div className="bg-white rounded-3xl max-w-md w-full p-8 shadow-2xl">
+                                <h3 className="text-xl font-bold text-slate-900 mb-4">Manual Attendance Adjustment</h3>
+                                <form onSubmit={handleSave} className="space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Check-In</label>
+                                            <input type="text" value={checkIn} onChange={e => setCheckIn(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Check-Out</label>
+                                            <input type="text" value={checkOut} onChange={e => setCheckOut(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">Reason for Adjustment (Audit Log)</label>
+                                        <textarea required rows="3" value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Employee forgot to punch in due to system downtime" className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm"></textarea>
+                                    </div>
+                                    <div className="flex space-x-3 pt-4">
+                                        <button type="button" onClick={() => setEditingRecord(null)} className="flex-1 bg-slate-100 py-3 rounded-xl font-semibold text-sm">Cancel</button>
+                                        <button type="submit" className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold text-sm shadow-lg shadow-indigo-200">Save Adjustment</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // 9. Reports Generation View
+        function ReportsView({ attendance, employees, branches, overtimes }) {
+            return (
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+                        <h2 className="text-2xl font-bold text-slate-900">Reports Generation</h2>
+                        <p className="text-sm text-slate-500">Monthly attendance summaries, late arrivals, overtime hours, and payroll integration metrics.</p>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                            <h3 className="text-lg font-bold text-slate-900">Monthly Summary Report (October 2026)</h3>
+                            <button onClick={() => alert("Report exported successfully!")} className="bg-slate-900 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-slate-800 transition">
+                                Export CSV / PDF
+                            </button>
+                        </div>
+                        <table className="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr className="bg-slate-50 text-xs font-bold text-slate-500 uppercase">
+                                    <th className="p-4">Employee</th>
+                                    <th className="p-4">Department</th>
+                                    <th className="p-4">Total Days Present</th>
+                                    <th className="p-4">Late Count</th>
+                                    <th className="p-4">Total Work Hours</th>
+                                    <th className="p-4">Total OT Hours</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {employees.map(emp => {
+                                    const empRecords = attendance.filter(a => a.employeeId === emp.id);
+                                    const daysPresent = empRecords.filter(a => a.status === 'Present' || a.status === 'Late').length;
+                                    const lateCount = empRecords.filter(a => a.status === 'Late').length;
+                                    const totalWork = empRecords.reduce((sum, a) => sum + (a.workHours || 0), 0);
+                                    const empOt = overtimes.filter(o => o.employeeId === emp.id && o.status === 'Approved').reduce((sum, o) => sum + o.hours, 0);
+
+                                    return (
+                                        <tr key={emp.id} className="hover:bg-slate-50">
+                                            <td className="p-4 font-bold text-slate-900">{emp.name}</td>
+                                            <td className="p-4 text-slate-600">{emp.department}</td>
+                                            <td className="p-4 text-slate-700 font-semibold">{daysPresent} days</td>
+                                            <td className="p-4 text-amber-600 font-semibold">{lateCount} times</td>
+                                            <td className="p-4 text-indigo-600 font-bold">{totalWork.toFixed(2)} hrs</td>
+                                            <td className="p-4 text-emerald-600 font-bold">{empOt.toFixed(2)} hrs</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
